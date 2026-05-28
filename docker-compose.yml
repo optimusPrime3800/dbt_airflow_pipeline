@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:13
+    container_name: weather_postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: weather_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  airflow-scheduler:
+    image: apache/airflow:2.8.0-python3.11
+    container_name: weather_airflow_scheduler
+    command: scheduler
+    restart: on-failure
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/weather_db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      OPENWEATHER_API_KEY: ""
+      OPENWEATHER_CITY: "London,Paris,Berlin,Madrid,Rome"
+      AIRFLOW__SCHEDULER__DAG_DIR_PROCESSOR_INTERVAL: "60"  # добавить
+      AIRFLOW__SCHEDULER__PARSING_PROCESSES: "2"            # добавить
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./dbt:/opt/dbt
+
+  airflow-webserver:
+    image: apache/airflow:2.8.0-python3.11
+    container_name: weather_airflow_webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      - airflow-scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/weather_db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: "300"   # добавить (5 минут
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./dbt:/opt/dbt
+
+  dbt-runner:
+    image: ghcr.io/dbt-labs/dbt-postgres:1.5.0
+    container_name: weather_dbt_runner
+    environment:
+      DBT_PROFILES_DIR: /opt/dbt
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: weather_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./dbt:/opt/dbt
+    command: ["tail", "-f", "/dev/null"]
+
+volumes:
+  postgres_data:
